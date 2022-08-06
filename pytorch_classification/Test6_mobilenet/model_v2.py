@@ -17,10 +17,10 @@ def _make_divisible(ch, divisor=8, min_ch=None):
         new_ch += divisor
     return new_ch
 
-
+#bottleneck结构
 class ConvBNReLU(nn.Sequential):
     def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, groups=1):
-        padding = (kernel_size - 1) // 2
+        padding = (kernel_size - 1) // 2   #填充
         super(ConvBNReLU, self).__init__(
             nn.Conv2d(in_channel, out_channel, kernel_size, stride, padding, groups=groups, bias=False),
             nn.BatchNorm2d(out_channel),

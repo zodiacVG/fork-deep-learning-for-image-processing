@@ -5,7 +5,7 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 from functools import partial
 
-
+#将传入的channal调整到离他最近的8的整数倍
 def _make_divisible(ch, divisor=8, min_ch=None):
     """
     This function is taken from the original tf repo.
@@ -21,7 +21,7 @@ def _make_divisible(ch, divisor=8, min_ch=None):
         new_ch += divisor
     return new_ch
 
-
+#卷积结构  卷积 + BN + 激活函数 
 class ConvBNActivation(nn.Sequential):
     def __init__(self,
                  in_planes: int,
@@ -47,22 +47,24 @@ class ConvBNActivation(nn.Sequential):
                                                activation_layer(inplace=True))
 
 
+#注意力
 class SqueezeExcitation(nn.Module):
     def __init__(self, input_c: int, squeeze_factor: int = 4):
         super(SqueezeExcitation, self).__init__()
         squeeze_c = _make_divisible(input_c // squeeze_factor, 8)
-        self.fc1 = nn.Conv2d(input_c, squeeze_c, 1)
+        self.fc1 = nn.Conv2d(input_c, squeeze_c, 1)   #使用卷积作为全连接层，卷积核大小为1
         self.fc2 = nn.Conv2d(squeeze_c, input_c, 1)
 
-    def forward(self, x: Tensor) -> Tensor:
-        scale = F.adaptive_avg_pool2d(x, output_size=(1, 1))
-        scale = self.fc1(scale)
-        scale = F.relu(scale, inplace=True)
-        scale = self.fc2(scale)
-        scale = F.hardsigmoid(scale, inplace=True)
-        return scale * x
+    def forward(self, x: Tensor) -> Tensor:  #传播
+        scale = F.adaptive_avg_pool2d(x, output_size=(1, 1))   #平均池化到1x1大小
+        scale = self.fc1(scale)     #卷积层1
+        scale = F.relu(scale, inplace=True)    #对应激活函数
+        scale = self.fc2(scale)    #卷积层2
+        scale = F.hardsigmoid(scale, inplace=True)     #h-sigmoid
+        return scale * x    
 
 
+#每一个bneck结构的参数配置。共有7个参数
 class InvertedResidualConfig:
     def __init__(self,
                  input_c: int,
@@ -72,7 +74,7 @@ class InvertedResidualConfig:
                  use_se: bool,
                  activation: str,
                  stride: int,
-                 width_multi: float):
+                 width_multi: float):  #倍率因子α
         self.input_c = self.adjust_channels(input_c, width_multi)
         self.kernel = kernel
         self.expanded_c = self.adjust_channels(expanded_c, width_multi)
@@ -86,29 +88,30 @@ class InvertedResidualConfig:
         return _make_divisible(channels * width_multi, 8)
 
 
+#v3新的bottleneck结构
 class InvertedResidual(nn.Module):
     def __init__(self,
-                 cnf: InvertedResidualConfig,
+                 cnf: InvertedResidualConfig,  #bneck的配置文件
                  norm_layer: Callable[..., nn.Module]):
         super(InvertedResidual, self).__init__()
 
         if cnf.stride not in [1, 2]:
             raise ValueError("illegal stride value.")
 
-        self.use_res_connect = (cnf.stride == 1 and cnf.input_c == cnf.out_c)
+        self.use_res_connect = (cnf.stride == 1 and cnf.input_c == cnf.out_c) #是否使用shortcut连接
 
         layers: List[nn.Module] = []
-        activation_layer = nn.Hardswish if cnf.use_hs else nn.ReLU
+        activation_layer = nn.Hardswish if cnf.use_hs else nn.ReLU   #激活函数。在pytorch1.7以上才有官方实现的函数
 
-        # expand
-        if cnf.expanded_c != cnf.input_c:
+        # expand  block的第一部分：升维的卷积层
+        if cnf.expanded_c != cnf.input_c:   #如果输入输出维度相同的话就不需要升维
             layers.append(ConvBNActivation(cnf.input_c,
                                            cnf.expanded_c,
                                            kernel_size=1,
                                            norm_layer=norm_layer,
                                            activation_layer=activation_layer))
 
-        # depthwise
+        # depthwise   block第二部分：Dwise
         layers.append(ConvBNActivation(cnf.expanded_c,
                                        cnf.expanded_c,
                                        kernel_size=cnf.kernel,
@@ -117,20 +120,21 @@ class InvertedResidual(nn.Module):
                                        norm_layer=norm_layer,
                                        activation_layer=activation_layer))
 
-        if cnf.use_se:
+        if cnf.use_se:  #如果使用SE就加入SE模块
             layers.append(SqueezeExcitation(cnf.expanded_c))
-
-        # project
+ 
+        # project   block第三（四）部分  降维卷积层
         layers.append(ConvBNActivation(cnf.expanded_c,
                                        cnf.out_c,
                                        kernel_size=1,
                                        norm_layer=norm_layer,
-                                       activation_layer=nn.Identity))
+                                       activation_layer=nn.Identity))   #线性激活
 
         self.block = nn.Sequential(*layers)
         self.out_channels = cnf.out_c
         self.is_strided = cnf.stride > 1
 
+    #正向传播过程
     def forward(self, x: Tensor) -> Tensor:
         result = self.block(x)
         if self.use_res_connect:
@@ -141,9 +145,9 @@ class InvertedResidual(nn.Module):
 
 class MobileNetV3(nn.Module):
     def __init__(self,
-                 inverted_residual_setting: List[InvertedResidualConfig],
-                 last_channel: int,
-                 num_classes: int = 1000,
+                 inverted_residual_setting: List[InvertedResidualConfig],   #一系列bneck结构参数的列表
+                 last_channel: int,  #倒数第二个卷积层输出节点个数
+                 num_classes: int = 1000,  #需要分类的类别个数
                  block: Optional[Callable[..., nn.Module]] = None,
                  norm_layer: Optional[Callable[..., nn.Module]] = None):
         super(MobileNetV3, self).__init__()
@@ -162,6 +166,8 @@ class MobileNetV3(nn.Module):
 
         layers: List[nn.Module] = []
 
+        #K开始构建网络
+
         # building first layer
         firstconv_output_c = inverted_residual_setting[0].input_c
         layers.append(ConvBNActivation(3,
@@ -170,11 +176,11 @@ class MobileNetV3(nn.Module):
                                        stride=2,
                                        norm_layer=norm_layer,
                                        activation_layer=nn.Hardswish))
-        # building inverted residual blocks
+        # building inverted residual blocks   中间的block层
         for cnf in inverted_residual_setting:
             layers.append(block(cnf, norm_layer))
 
-        # building last several layers
+        # building last several layers  最后还有几层非标准的
         lastconv_input_c = inverted_residual_setting[-1].out_c
         lastconv_output_c = 6 * lastconv_input_c
         layers.append(ConvBNActivation(lastconv_input_c,
@@ -182,9 +188,9 @@ class MobileNetV3(nn.Module):
                                        kernel_size=1,
                                        norm_layer=norm_layer,
                                        activation_layer=nn.Hardswish))
-        self.features = nn.Sequential(*layers)
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Sequential(nn.Linear(lastconv_output_c, last_channel),
+        self.features = nn.Sequential(*layers)  #用来提取特征的主干部分
+        self.avgpool = nn.AdaptiveAvgPool2d(1)  #平均池化
+        self.classifier = nn.Sequential(nn.Linear(lastconv_output_c, last_channel), #全连接层
                                         nn.Hardswish(inplace=True),
                                         nn.Dropout(p=0.2, inplace=True),
                                         nn.Linear(last_channel, num_classes))
@@ -203,6 +209,7 @@ class MobileNetV3(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def _forward_impl(self, x: Tensor) -> Tensor:
+        #即是整个流程
         x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -214,6 +221,7 @@ class MobileNetV3(nn.Module):
         return self._forward_impl(x)
 
 
+#只需要传入配置文件就可以了
 def mobilenet_v3_large(num_classes: int = 1000,
                        reduced_tail: bool = False) -> MobileNetV3:
     """

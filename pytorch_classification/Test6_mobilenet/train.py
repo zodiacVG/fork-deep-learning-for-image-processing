@@ -8,7 +8,7 @@ import torch.optim as optim
 from torchvision import transforms, datasets
 from tqdm import tqdm
 
-from model_v2 import MobileNetV2
+from model_v3 import mobilenet_v3_small
 
 
 def main():
@@ -61,11 +61,11 @@ def main():
                                                                            val_num))
 
     # create model
-    net = MobileNetV2(num_classes=5)
+    net = mobilenet_v3_small(num_classes=5)
 
     # load pretrain weights
     # download url: https://download.pytorch.org/models/mobilenet_v2-b0353104.pth
-    model_weight_path = "./mobilenet_v2.pth"
+    model_weight_path = "./mobilenet_v3_small.pth"
     assert os.path.exists(model_weight_path), "file {} dose not exist.".format(model_weight_path)
     pre_weights = torch.load(model_weight_path, map_location='cpu')
 
@@ -87,7 +87,7 @@ def main():
     optimizer = optim.Adam(params, lr=0.0001)
 
     best_acc = 0.0
-    save_path = './MobileNetV2.pth'
+    save_path = './MobileNetV3_small.pth'
     train_steps = len(train_loader)
     for epoch in range(epochs):
         # train
